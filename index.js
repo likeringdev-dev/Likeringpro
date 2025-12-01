@@ -26,43 +26,52 @@ const pool = new Pool({
 
 // 3. Endpoints (Rutas de la API)
 
-// A. Ruta GET: Leer todos los productos (Para mostrar en Flutter)
-// URL: /api/productos
-app.get('/api/productos', async (req, res) => {
-    console.log('GET /api/productos recibido.');
+// A. Ruta GET: Leer todos los USUARIOS
+// URL: /api/usuarios
+app.get('/api/usuarios', async (req, res) => {
+    console.log('GET /api/usuarios recibido.');
     try {
-        // Ejecuta la consulta SQL
-        const result = await pool.query('SELECT id, nombre, precio FROM productos ORDER BY id DESC');
+        // Ejecuta la consulta SQL a la tabla 'usuarios'
+        const queryText = 'SELECT id, nombre, username, descripcion, tipo, seguidores, likes_recibidos FROM usuarios ORDER BY id DESC';
+        const result = await pool.query(queryText);
         
-        // Responde con los resultados en formato JSON
+        // Responde con los resultados
         res.json(result.rows); 
     } catch (err) {
-        console.error('Error al obtener productos:', err);
+        console.error('Error al obtener usuarios:', err);
         res.status(500).json({ error: 'Fallo interno al obtener datos.' });
     }
 });
 
-// B. Ruta POST: Crear un nuevo producto (Para enviar datos desde Flutter)
-// URL: /api/productos
-app.post('/api/productos', async (req, res) => {
-    // req.body contiene los datos JSON enviados por Flutter (ej. { "nombre": "Camisa", "precio": 25.99 })
-    const { nombre, precio } = req.body; 
+// B. Ruta POST: Crear un nuevo USUARIO
+// URL: /api/usuarios
+app.post('/api/usuarios', async (req, res) => {
+    // Extrae los campos necesarios para crear un usuario
+    const { correo, username, contrasena, nombre, descripcion, tipo } = req.body; 
     
-    // Validación básica de datos
-    if (!nombre || precio === undefined) {
-        return res.status(400).json({ error: 'Faltan campos (nombre o precio).' });
+    // Validación de datos esenciales
+    if (!correo || !username || !contrasena || !nombre) {
+        return res.status(400).json({ error: 'Faltan campos esenciales: correo, username, contrasena, o nombre.' });
     }
 
     try {
-        // Ejecuta la consulta SQL con placeholders ($1, $2) para prevenir inyecciones SQL
-        const queryText = 'INSERT INTO productos(nombre, precio) VALUES($1, $2) RETURNING id, nombre, precio';
-        const result = await pool.query(queryText, [nombre, precio]);
+        // ⚠️ Nota: Esta contrasena debe ser hasheada con bcrypt en una aplicación real.
+        const queryText = `
+            INSERT INTO usuarios (correo, username, contrasena, nombre, descripcion, tipo)
+            VALUES ($1, $2, $3, $4, $5, $6) 
+            RETURNING id, nombre, username, tipo`;
+            
+        const result = await pool.query(queryText, [correo, username, contrasena, nombre, descripcion, tipo]);
         
         // Devuelve el objeto creado con el código 201 (Created)
         res.status(201).json(result.rows[0]); 
     } catch (err) {
-        console.error('Error al crear producto:', err);
-        res.status(500).json({ error: 'Fallo interno al crear el producto.' });
+        console.error('Error al crear usuario:', err);
+        // Si hay error por duplicidad (ej. correo o username ya existen)
+        if (err.code === '23505') { 
+            return res.status(409).json({ error: 'El correo o nombre de usuario ya existe.' });
+        }
+        res.status(500).json({ error: 'Fallo interno al crear el usuario.' });
     }
 });
 
