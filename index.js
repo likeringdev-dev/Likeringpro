@@ -32,7 +32,7 @@ app.get('/api/usuarios', async (req, res) => {
     console.log('GET /api/usuarios recibido.');
     try {
         // Ejecuta la consulta SQL a la tabla 'usuarios'
-        const queryText = 'SELECT id, nombre, username, descripcion, tipo, seguidores, likes_recibidos FROM usuarios ORDER BY id DESC';
+       const queryText = 'SELECT id, nombre, username, descripcion, tipo, seguidores, likes_recibidos, imagen_url FROM usuarios ORDER BY id DESC';
         const result = await pool.query(queryText);
         
         // Responde con los resultados
