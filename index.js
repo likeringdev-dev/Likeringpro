@@ -14,9 +14,7 @@ app.use(cors());
 // === CONFIGURACIÓN DE LA BASE DE DATOS (CONEXIÓN SSL) ===
 // =======================================================
 
-// 🚨 Utilizamos DATABASE_URL para la conexión. 
-// Render establece process.env.DATABASE_URL por defecto si usas un Internal Database, 
-// o la debes configurar tú si usas una externa (como Aiven).
+// Utilizamos DATABASE_URL para la conexión. 
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL, 
     // Para entornos como Aiven/Render, configuramos SSL
