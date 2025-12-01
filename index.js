@@ -1,57 +1,56 @@
+// Importaciones de librerías
 const express = require('express');
 const { Pool } = require('pg');
-const dotenv = require('dotenv');
 const cors = require('cors');
+const bcrypt = require('bcrypt'); // Librería para cifrar y verificar contraseñas
+require('dotenv').config(); // Cargar variables de entorno desde .env (Solo para desarrollo local)
 
-// Cargar variables de entorno desde .env (Solo para desarrollo local)
-dotenv.config();
-
+// Configuración de Express
 const app = express();
+// El puerto de Render debe ser tomado de process.env.PORT, o 3000/10000 como fallback
+const port = process.env.PORT || 3000; 
+
+// Configuración de CORS
+// Permite solicitudes desde cualquier origen (necesario para Flutter)
+app.use(cors()); 
+
+// Middleware para parsear JSON
 app.use(express.json());
-app.use(cors());
 
-// =======================================================
-// === CONFIGURACIÓN DE LA BASE DE DATOS (CONEXIÓN SSL) ===
-// =======================================================
-
-// Utilizamos DATABASE_URL para la conexión. 
+// === 1. CONFIGURACIÓN DE LA CONEXIÓN A POSTGRESQL (AIVEN) ===
 const pool = new Pool({
-    connectionString: process.env.DATABASE_URL, 
-    // Para entornos como Aiven/Render, configuramos SSL
-    ssl: {
-        rejectUnauthorized: false, // Permite la conexión sin un certificado CA específico
-    }
+  // Utiliza variables de entorno individuales que tienes configuradas
+  user: process.env.PG_USER, //
+  host: process.env.PG_HOST, //
+  database: process.env.PG_DATABASE, //
+  password: process.env.PG_PASSWORD, //
+  port: process.env.PG_PORT, //
+  
+  // 🚨 Habilitar SSL para Aiven y evitar el error SELF_SIGNED_CERT_IN_CHAIN
+  ssl: {
+    rejectUnauthorized: false, // Permite la conexión sin un certificado CA específico
+  },
 });
 
-// Prueba de conexión
-pool.connect()
-  .then(() => {
-    console.log('✅ Conexión a PostgreSQL establecida correctamente.');
+// Mensaje para verificar la conexión inicial
+pool.query('SELECT NOW()')
+  .then(res => {
+    console.log('✅ Conexión a PostgreSQL establecida correctamente en:', res.rows[0].now);
   })
-  .catch((err) => {
-    console.error('❌ Error al conectar a la base de datos:', err);
-    // Si la conexión falla, el servidor Express se mantiene activo para que puedas ver el error en los logs de Render.
+  .catch(err => {
+    // Si la conexión falla, el servidor Express se mantiene activo.
+    console.error('❌ Error al conectar a la base de datos:', err.stack);
   });
 
-// =========================================
-// === ENDPOINTS DE USUARIOS (API REST) ===
-// =========================================
+// =============================================
+// === ENDPOINTS DE AUTENTICACIÓN Y USUARIOS ===
+// =============================================
 
-// Endpoint de prueba
+// Endpoint raíz para verificar que el servicio esté vivo
 app.get('/', (req, res) => {
     res.send('Servidor Express funcionando. Ir a /api/usuarios para ver datos.');
 });
 
-// 1. Obtener todos los usuarios
-app.get('/api/usuarios', async (req, res) => {
-    try {
-        const result = await pool.query('SELECT * FROM usuarios');
-        res.json(result.rows);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Error interno del servidor.' });
-    }
-});
 
 // 2. BUSCAR USUARIO (Paso 1 del Login en Flutter: Busca por username o correo)
 // GET /api/usuarios/buscar?query=alguien
@@ -62,22 +61,16 @@ app.get('/api/usuarios/buscar', async (req, res) => {
     }
 
     try {
-        // Busca si el query coincide con el username O con el correo
         const result = await pool.query(
-            'SELECT id, nombre, username, tipo, seguidores, imagen_url, correo, password FROM usuarios WHERE username = $1 OR correo = $1', 
-            [query.toLowerCase()] // Usamos toLowerCase para hacer la búsqueda sensible a mayúsculas/minúsculas
+            'SELECT id, nombre, username, correo, imagen_url FROM usuarios WHERE username = $1 OR correo = $1', 
+            [query]
         );
 
         if (result.rows.length === 0) {
-            // El usuario no fue encontrado (Retorna 404 como espera el api_service.dart de Flutter)
             return res.status(404).json({ error: 'Usuario no encontrado.' });
         }
 
-        // Retorna el primer usuario encontrado (el paso 1 no necesita la contraseña)
         const user = result.rows[0];
-        // Eliminamos la contraseña antes de enviarla
-        delete user.password; 
-
         res.json(user);
 
     } catch (err) {
@@ -86,43 +79,47 @@ app.get('/api/usuarios/buscar', async (req, res) => {
     }
 });
 
-// 3. INICIAR SESIÓN (Paso 2 del Login en Flutter: Verifica password)
+
+// 3. INICIAR SESIÓN (Paso 2 del Login en Flutter: Verifica hash de contraseña con bcrypt)
 // POST /api/usuarios/login
 app.post('/api/usuarios/login', async (req, res) => {
     const { query, password } = req.body; // 'query' es username o email
-
+    
     if (!query || !password) {
-        return res.status(400).json({ error: 'Faltan credenciales (query y/o password).' });
+        return res.status(400).json({ error: 'Faltan credenciales (usuario/correo y contraseña).' });
     }
 
     try {
-        // Busca al usuario (incluye la contraseña para verificación)
-        const result = await pool.query(
-            'SELECT id, nombre, username, tipo, seguidores, imagen_url, correo, password FROM usuarios WHERE username = $1 OR correo = $1', 
-            [query.toLowerCase()]
-        );
+        // Seleccionamos el hash de contraseña (contrasena_hash) para la verificación
+        const loginQuery = `
+            SELECT id, nombre, username, correo, imagen_url, contrasena_hash
+            FROM usuarios
+            WHERE username = $1 OR correo = $1`;
+            
+        const result = await pool.query(loginQuery, [query]);
 
         if (result.rows.length === 0) {
-            // No existe el usuario
+            // Usuario no existe
             return res.status(401).json({ error: 'Credenciales incorrectas.' });
         }
 
         const user = result.rows[0];
+        
+        // 1. Comparar la contraseña ingresada con el hash almacenado
+        const isMatch = await bcrypt.compare(password, user.contrasena_hash);
 
-        // 🚨 NOTA: En un entorno real, usarías una librería de hashing (como bcrypt)
-        // para comparar la contraseña ingresada con la contraseña hasheada guardada.
-        // Aquí asumiremos un chequeo simple para propósitos de prueba:
-        if (user.password !== password) {
+        if (!isMatch) {
+            // Contraseña incorrecta
             return res.status(401).json({ error: 'Contraseña incorrecta.' });
         }
 
-        // Login exitoso: Eliminamos la contraseña antes de devolver el objeto
-        delete user.password; 
-        res.status(200).json(user);
+        // 2. Autenticación exitosa - Devolvemos el usuario (sin el hash)
+        const { contrasena_hash, ...userData } = user;
+        res.status(200).json(userData);
 
     } catch (err) {
-        console.error('Error durante el login:', err);
-        res.status(500).json({ error: 'Error interno del servidor durante el login.' });
+        console.error('Error en el inicio de sesión:', err);
+        res.status(500).json({ error: 'Error interno del servidor.' });
     }
 });
 
@@ -131,7 +128,6 @@ app.post('/api/usuarios/login', async (req, res) => {
 // === INICIO DEL SERVIDOR ===
 // =========================================
 
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-    console.log(`Servidor Express escuchando en el puerto ${PORT}`);
+app.listen(port, () => {
+    console.log(`Servidor Express escuchando en el puerto ${port}`);
 });
