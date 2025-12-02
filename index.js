@@ -32,7 +32,7 @@ const pool = new Pool({
   // Usamos la cadena de conexión completa que incluye todos los parámetros
   connectionString: process.env.DATABASE_URL,
   ssl: {
-    rejectUnauthorized: false, // Necesario para bases de datos Aiven o Cloud que usan SSL autofirmado
+    rejectUnauthorized: false, // Necesario para bases de datos Cloud que usan SSL autofirmado
   },
 });
 
@@ -77,9 +77,8 @@ app.post('/api/usuarios/registro', async (req, res) => {
         // 3. Subir imagen a Cloudinary (si se proporcionó)
         let imageUrl = null;
         if (imagenBase64) {
-            // Cloudinary maneja el string Base64 (con o sin prefijo Data URL) de forma nativa, 
-            // evitando el error ENAMETOOLONG al no tocar el disco local.
             console.log('Iniciando subida de imagen a Cloudinary...');
+            // La clave: subir el Base64 directamente (soluciona ENAMETOOLONG)
             const uploadResult = await cloudinary.uploader.upload(imagenBase64, {
                 folder: "likering_avatars", // Carpeta en Cloudinary
                 resource_type: "image", // Forzamos el tipo
@@ -98,8 +97,6 @@ app.post('/api/usuarios/registro', async (req, res) => {
 
 
         // 5. Insertar el nuevo usuario en PostgreSQL
-        // Asegúrate de que tu tabla `usuarios` tenga las columnas: 
-        // id, nombre, username, correo, contrasena_hash, imagen_url, tipo, seguidores
         const insertQuery = `
             INSERT INTO usuarios (nombre, username, correo, contrasena_hash, imagen_url, tipo, seguidores)
             VALUES ($1, $2, $3, $4, $5, 'general', 0)
@@ -120,7 +117,8 @@ app.post('/api/usuarios/registro', async (req, res) => {
         res.status(201).json(newUser);
 
     } catch (err) {
-        console.error('❌ Error fatal al registrar usuario:', err.message); 
+        // 💡 CAMBIO DE DIAGNÓSTICO: Imprimir el objeto de error completo
+        console.error('❌ Error fatal al registrar usuario:', err); 
         // Para errores internos de DB o Cloudinary, devolvemos un 500
         res.status(500).json({ error: 'Error interno del servidor durante el registro.' });
     }
