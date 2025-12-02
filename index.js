@@ -1,4 +1,6 @@
 // Importaciones de librerías
+const cloudinary = require('cloudinary').v2;
+const multer = require('multer');
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
@@ -12,11 +14,17 @@ const port = process.env.PORT || 10000;
 
 // Configuración de CORS y Middleware
 app.use(cors()); 
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 
 // =======================================================
 // === CONFIGURACIÓN DE LA BASE DE DATOS (CONEXIÓN SSL) ===
 // =======================================================
+
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME, // Debes añadir esto a tu .env
+    api_key: process.env.CLOUDINARY_API_KEY,       // Debes añadir esto a tu .env
+    api_secret: process.env.CLOUDINARY_API_SECRET, // Debes añadir esto a tu .env
+});
 
 const pool = new Pool({
   // Aseguramos que el puerto se convierta a número entero
@@ -85,6 +93,54 @@ app.get('/api/usuarios/buscar', async (req, res) => {
     }
 });
 
+
+app.post('/api/usuarios/registro', async (req, res) => {
+    const { nombre, correo, username, contrasena, imagenBase64 } = req.body;
+    
+    try {
+        // 0. Validaciones básicas
+        if (!nombre || !correo || !username || !contrasena) {
+            return res.status(400).json({ error: 'Faltan campos obligatorios.' });
+        }
+        
+        // --- 1. Subida de Imagen a Cloudinary ---
+        let imageUrl = null;
+        if (imagenBase64) {
+            // Subir el buffer Base64 a Cloudinary
+            const uploadResult = await cloudinary.uploader.upload(
+                `data:image/jpeg;base64,${imagenBase64}`, // La data URI para Base64
+                { 
+                    folder: 'likering_perfiles', 
+                    // Otras opciones de Cloudinary si las necesitas
+                } 
+            );
+            imageUrl = uploadResult.secure_url; // Obtenemos la URL segura
+        }
+
+        // --- 2. Hashing de Contraseña con BCrypt ---
+        // Generamos el hash con un factor de costo de 10
+        const contrasenaHash = await bcrypt.hash(contrasena, 10); 
+
+        // --- 3. Inserción en la Base de Datos ---
+        const insertQuery = `
+            INSERT INTO usuarios (nombre, correo, username, contrasena_hash, imagen_url)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, nombre, username, correo, imagen_url`;
+
+        const result = await pool.query(insertQuery, [nombre, correo, username, contrasenaHash, imageUrl]);
+
+        // 4. Éxito: Devolvemos los datos del nuevo usuario
+        res.status(201).json(result.rows[0]);
+
+    } catch (err) {
+        // Manejo de errores de duplicidad (ej. username o correo ya existen)
+        if (err.code === '23505') { // Código de error de duplicidad de PostgreSQL
+            return res.status(409).json({ error: 'El nombre de usuario o correo ya está registrado.' });
+        }
+        console.error('Error en el registro de usuario:', err);
+        res.status(500).json({ error: 'Error interno del servidor durante el registro.' });
+    }
+});
 
 // 3. INICIAR SESIÓN (Paso 2 del Login: Verifica hash de contraseña)
 // POST /api/usuarios/login
