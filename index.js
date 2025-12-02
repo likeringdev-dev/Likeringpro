@@ -1,30 +1,35 @@
 // Importaciones de librerías
-const cloudinary = require('cloudinary').v2;
-const multer = require('multer');
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
-require('dotenv').config(); 
+const cloudinary = require('cloudinary').v2; // Importamos Cloudinary
+require('dotenv').config();
+
+// =========================================
+// === CONFIGURACIÓN DE CLOUDINARY ===
+// =========================================
+// Nota: Estas variables deben estar configuradas en el panel de Render, no solo en .env
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
 // Configuración de Express
 const app = express();
 // El puerto de Render debe ser tomado de process.env.PORT, o 10000 como fallback
-const port = process.env.PORT || 10000; 
+const port = process.env.PORT || 10000;
 
 // Configuración de CORS y Middleware
-app.use(cors()); 
+app.use(cors());
+
+// 💡 CORRECCIÓN: Aumentamos el límite de tamaño del cuerpo para manejar imágenes Base64 grandes
 app.use(express.json({ limit: '50mb' }));
 
 // =======================================================
 // === CONFIGURACIÓN DE LA BASE DE DATOS (CONEXIÓN SSL) ===
 // =======================================================
-
-cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME, // Debes añadir esto a tu .env
-    api_key: process.env.CLOUDINARY_API_KEY,       // Debes añadir esto a tu .env
-    api_secret: process.env.CLOUDINARY_API_SECRET, // Debes añadir esto a tu .env
-});
 
 const pool = new Pool({
   // Aseguramos que el puerto se convierta a número entero
@@ -46,110 +51,87 @@ async function testDbConnection() {
         await pool.query('SELECT NOW()');
         console.log('✅ Conexión a PostgreSQL establecida correctamente.');
     } catch (err) {
-        // La conexión sigue funcionando, pero este error de inicialización evita el mensaje de éxito.
-        // Lo mostramos, pero confirmamos que la API sigue viva.
-        console.error('❌ Error al conectar a la base de datos (Inicialización):', err.stack);
-        console.log('⚠️ NOTA: El servidor Express está operativo, solo la prueba inicial de conexión a la DB falló por el certificado SSL.');
+        console.error('❌ Error al conectar con PostgreSQL:', err);
     }
 }
-testDbConnection(); 
-// Fin de la prueba de conexión
 
-// =============================================
-// === ENDPOINTS DE AUTENTICACIÓN Y USUARIOS ===
-// =============================================
-
-// Endpoint raíz para verificar que el servicio esté vivo
-app.get('/', (req, res) => {
-    res.send('Servidor Express funcionando. Ir a /api/usuarios/buscar o /api/usuarios/login.');
-});
+testDbConnection();
 
 
-// 2. BUSCAR USUARIO (Paso 1 del Login)
-// GET /api/usuarios/buscar?query=alguien
-app.get('/api/usuarios/buscar', async (req, res) => {
-    const { query } = req.query;
-    if (!query) {
-        return res.status(400).json({ error: 'Falta el parámetro de búsqueda (query).' });
-    }
-
-    try {
-        const result = await pool.query(
-            // El query utiliza $1 para buscar en ambos campos
-            'SELECT id, nombre, username, correo, imagen_url FROM usuarios WHERE username = $1 OR correo = $1', 
-            [query]
-        );
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: 'Usuario no encontrado.' });
-        }
-
-        const user = result.rows[0];
-        res.json(user);
-
-    } catch (err) {
-        console.error('Error al buscar usuario:', err);
-        res.status(500).json({ error: 'Error interno al buscar usuario.' });
-    }
-});
-
+// =========================================
+// === RUTA DE REGISTRO DE USUARIO ===
+// =========================================
 
 app.post('/api/usuarios/registro', async (req, res) => {
-    const { nombre, correo, username, contrasena, imagenBase64 } = req.body;
-    
     try {
-        // 0. Validaciones básicas
+        // Extraemos todos los datos, incluyendo la imagen Base64 (opcional)
+        const { nombre, correo, username, contrasena, imagenBase64 } = req.body;
+
+        // 1. Validaciones básicas de campos obligatorios
         if (!nombre || !correo || !username || !contrasena) {
             return res.status(400).json({ error: 'Faltan campos obligatorios.' });
         }
+
+        // 2. Revisar si el usuario o correo ya existen
+        const existingUser = await pool.query(
+            'SELECT id FROM usuarios WHERE username = $1 OR correo = $2',
+            [username, correo]
+        );
         
-        // --- 1. Subida de Imagen a Cloudinary ---
-        let imageUrl = null;
-        if (imagenBase64) {
-            // Subir el buffer Base64 a Cloudinary
-            const uploadResult = await cloudinary.uploader.upload(
-                `data:image/jpeg;base64,${imagenBase64}`, // La data URI para Base64
-                { 
-                    folder: 'likering_perfiles', 
-                    // Otras opciones de Cloudinary si las necesitas
-                } 
-            );
-            imageUrl = uploadResult.secure_url; // Obtenemos la URL segura
-        }
-
-        // --- 2. Hashing de Contraseña con BCrypt ---
-        // Generamos el hash con un factor de costo de 10
-        const contrasenaHash = await bcrypt.hash(contrasena, 10); 
-
-        // --- 3. Inserción en la Base de Datos ---
-        const insertQuery = `
-            INSERT INTO usuarios (nombre, correo, username, contrasena_hash, imagen_url)
-            VALUES ($1, $2, $3, $4, $5)
-            RETURNING id, nombre, username, correo, imagen_url`;
-
-        const result = await pool.query(insertQuery, [nombre, correo, username, contrasenaHash, imageUrl]);
-
-        // 4. Éxito: Devolvemos los datos del nuevo usuario
-        res.status(201).json(result.rows[0]);
-
-    } catch (err) {
-        // Manejo de errores de duplicidad (ej. username o correo ya existen)
-        if (err.code === '23505') { // Código de error de duplicidad de PostgreSQL
+        if (existingUser.rows.length > 0) {
+            // Error 409: Conflicto (Recurso ya existente)
             return res.status(409).json({ error: 'El nombre de usuario o correo ya está registrado.' });
         }
-        console.error('Error en el registro de usuario:', err);
-        res.status(500).json({ error: 'Error interno del servidor durante el registro.' });
+
+        // 3. Subir imagen a Cloudinary (si se proporcionó)
+        let imageUrl = null;
+        if (imagenBase64) {
+            // Cloudinary acepta el string Base64 directamente
+            const uploadResult = await cloudinary.uploader.upload(imagenBase64, {
+                folder: "likering_avatars", // Carpeta donde se guardará en Cloudinary
+                resource_type: "image",
+            });
+            imageUrl = uploadResult.secure_url; // Obtenemos la URL pública
+            console.log('Imagen subida a Cloudinary:', imageUrl);
+        }
+
+        // 4. Hashear la contraseña
+        const saltRounds = 10;
+        const contrasenaHash = await bcrypt.hash(contrasena, saltRounds);
+
+        // 5. Insertar el nuevo usuario en PostgreSQL
+        const insertQuery = `
+            INSERT INTO usuarios (nombre, username, correo, contrasena_hash, imagen_url, tipo, seguidores)
+            VALUES ($1, $2, $3, $4, $5, 'general', 0)
+            RETURNING id, nombre, username, correo, imagen_url, tipo, seguidores`;
+
+        const newUserResult = await pool.query(insertQuery, [
+            nombre,
+            username,
+            correo,
+            contrasenaHash,
+            imageUrl // Será NULL si la imagen no se proporcionó
+        ]);
+
+        const newUser = newUserResult.rows[0];
+        
+        // 6. Registro exitoso (Código 201 Created)
+        res.status(201).json(newUser);
+
+    } catch (err) {
+        // 💡 Importante: Imprime el error real en los logs de Render para depurar.
+        console.error('Error al registrar usuario:', err); 
+        res.status(500).json({ error: 'Error interno del servidor durante el registro' });
     }
 });
 
-// 3. INICIAR SESIÓN (Paso 2 del Login: Verifica hash de contraseña)
-// POST /api/usuarios/login
+
+// =========================================
+// === RUTA DE INICIO DE SESIÓN (LOGIN) ===
+// =========================================
+
 app.post('/api/usuarios/login', async (req, res) => {
-    const { query, password } = req.body; 
-    
-    if (!query || !password) {
-        return res.status(400).json({ error: 'Faltan credenciales (usuario/correo y contraseña).' });
-    }
+    const { query, password } = req.body; // 'query' puede ser username o correo
 
     try {
         // Seleccionamos el hash de contraseña (contrasena_hash)
