@@ -32,14 +32,10 @@ app.use(express.json({ limit: '50mb' }));
 // =======================================================
 
 const pool = new Pool({
-  // Aseguramos que el puerto se convierta a número entero
-  port: parseInt(process.env.PG_PORT, 10), 
-  user: process.env.PG_USER, 
-  host: process.env.PG_HOST, 
-  database: process.env.PG_DATABASE, 
-  password: process.env.PG_PASSWORD, 
+  // 💡 AJUSTE: Usamos la cadena de conexión completa de Render (DATABASE_URL)
+  connectionString: process.env.DATABASE_URL,
   
-  // Habilitamos SSL para Aiven y usamos rejectUnauthorized: false para ignorar el certificado self-signed
+  // Mantenemos esta configuración para ignorar el certificado self-signed de Aiven.
   ssl: {
     rejectUnauthorized: false, 
   },
@@ -52,6 +48,7 @@ async function testDbConnection() {
         console.log('✅ Conexión a PostgreSQL establecida correctamente.');
     } catch (err) {
         console.error('❌ Error al conectar con PostgreSQL:', err);
+        // Si sigue fallando aquí, el problema es de red/firewall/credenciales.
     }
 }
 
