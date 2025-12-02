@@ -3,13 +3,13 @@ const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
-const cloudinary = require('cloudinary').v2; // Importamos Cloudinary
+const cloudinary = require('cloudinary').v2;
+// ❌ IMPORTANTE: Si tenías 'const multer = require('multer');' ¡BÓRRALA!
 require('dotenv').config();
 
 // =========================================
 // === CONFIGURACIÓN DE CLOUDINARY ===
 // =========================================
-// Nota: Estas variables deben estar configuradas en el panel de Render, no solo en .env
 cloudinary.config({
     cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
     api_key: process.env.CLOUDINARY_API_KEY,
@@ -18,37 +18,32 @@ cloudinary.config({
 
 // Configuración de Express
 const app = express();
-// El puerto de Render debe ser tomado de process.env.PORT, o 10000 como fallback
 const port = process.env.PORT || 10000;
 
 // Configuración de CORS y Middleware
 app.use(cors());
 
-// 💡 CORRECCIÓN: Aumentamos el límite de tamaño del cuerpo para manejar imágenes Base64 grandes
+// Aumentamos el límite de tamaño del cuerpo para manejar imágenes Base64 grandes
 app.use(express.json({ limit: '50mb' }));
 
 // =======================================================
 // === CONFIGURACIÓN DE LA BASE DE DATOS (CONEXIÓN SSL) ===
 // =======================================================
-
 const pool = new Pool({
-  // 💡 AJUSTE: Usamos la cadena de conexión completa de Render (DATABASE_URL)
+  // Usamos la cadena de conexión completa
   connectionString: process.env.DATABASE_URL,
-  
-  // Mantenemos esta configuración para ignorar el certificado self-signed de Aiven.
   ssl: {
-    rejectUnauthorized: false, 
+    rejectUnauthorized: false,
   },
 });
 
-// Mensaje para verificar la conexión inicial (Usando async/await para manejo de errores)
+// Mensaje para verificar la conexión inicial
 async function testDbConnection() {
     try {
         await pool.query('SELECT NOW()');
         console.log('✅ Conexión a PostgreSQL establecida correctamente.');
     } catch (err) {
         console.error('❌ Error al conectar con PostgreSQL:', err);
-        // Si sigue fallando aquí, el problema es de red/firewall/credenciales.
     }
 }
 
@@ -83,9 +78,10 @@ app.post('/api/usuarios/registro', async (req, res) => {
         // 3. Subir imagen a Cloudinary (si se proporcionó)
         let imageUrl = null;
         if (imagenBase64) {
-            // Cloudinary acepta el string Base64 directamente
+            // 💡 ESTA ES LA CLAVE: Cloudinary acepta el string Base64 directamente como dato,
+            // sin necesidad de guardarlo en disco (lo que causaba ENAMETOOLONG).
             const uploadResult = await cloudinary.uploader.upload(imagenBase64, {
-                folder: "likering_avatars", // Carpeta donde se guardará en Cloudinary
+                folder: "likering_avatars",
                 resource_type: "image",
             });
             imageUrl = uploadResult.secure_url; // Obtenemos la URL pública
@@ -107,7 +103,7 @@ app.post('/api/usuarios/registro', async (req, res) => {
             username,
             correo,
             contrasenaHash,
-            imageUrl // Será NULL si la imagen no se proporcionó
+            imageUrl
         ]);
 
         const newUser = newUserResult.rows[0];
@@ -116,7 +112,7 @@ app.post('/api/usuarios/registro', async (req, res) => {
         res.status(201).json(newUser);
 
     } catch (err) {
-        // 💡 Importante: Imprime el error real en los logs de Render para depurar.
+        // ERROR: El error ENAMETOOLONG se produce aquí, causado por código de manejo de archivos
         console.error('Error al registrar usuario:', err); 
         res.status(500).json({ error: 'Error interno del servidor durante el registro' });
     }
